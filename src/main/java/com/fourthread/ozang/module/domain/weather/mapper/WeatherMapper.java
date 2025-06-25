@@ -1,11 +1,10 @@
 package com.fourthread.ozang.module.domain.weather.mapper;
 
 import com.fourthread.ozang.module.domain.weather.dto.WeatherAPILocation;
-import com.fourthread.ozang.module.domain.weather.dto.WeatherApiResponse;
 import com.fourthread.ozang.module.domain.weather.dto.WeatherApiResponse.WeatherItem;
 import com.fourthread.ozang.module.domain.weather.dto.WeatherDto;
 import com.fourthread.ozang.module.domain.weather.dto.WeatherSummaryDto;
-import com.fourthread.ozang.module.domain.weather.entity.SkyStatus;
+import com.fourthread.ozang.module.domain.weather.dto.type.*;
 import com.fourthread.ozang.module.domain.weather.entity.Weather;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
