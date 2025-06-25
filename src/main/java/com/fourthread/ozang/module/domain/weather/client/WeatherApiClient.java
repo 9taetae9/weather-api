@@ -1,17 +1,17 @@
 package com.fourthread.ozang.module.domain.weather.client;
 
-import com.fourthread.ozang.module.domain.weather.dto.WeatherApiResponse;
-import com.fourthread.ozang.module.domain.weather.dto.WeatherNowcastResponse;
+import com.fourthread.ozang.module.domain.weather.dto.external.WeatherApiResponse;
 import com.fourthread.ozang.module.domain.weather.entity.GridCoordinate;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import com.fourthread.ozang.module.domain.weather.exception.WeatherApiException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -19,213 +19,138 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 @Slf4j
+@RequiredArgsConstructor
 public class WeatherApiClient {
 
     private final RestTemplate restTemplate;
-    private final String apiKey;
-    private final String baseUrl;
 
-    public WeatherApiClient(RestTemplate restTemplate,
-        @Value("${weather.api.key}") String apiKey,
-        @Value("${weather.api.nowcast.url}") String baseUrl) {
-        this.restTemplate = restTemplate;
-        this.apiKey = apiKey;
-        this.baseUrl = baseUrl;
-    }
+    @Value("${weather.api.key}")
+    private String apiKey;
 
+    @Value("${weather.api.base-url:http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0}")
+    private String baseUrl;
+
+    private static final String FORECAST_ENDPOINT = "/getVilageFcst";
+    private static final String NOWCAST_ENDPOINT = "/getUltraSrtNcst";
+
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HHmm");
+
+    //  단기예보 조회
     public WeatherApiResponse getWeatherForecast(GridCoordinate coordinate) {
         LocalDateTime baseDateTime = getBaseDateTime();
-        String baseDate = baseDateTime.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String baseTime = baseDateTime.format(DateTimeFormatter.ofPattern("HHmm"));
+        String baseDate = baseDateTime.format(DATE_FORMATTER);
+        String baseTime = baseDateTime.format(TIME_FORMATTER);
 
-        // =============== 성공한 테스트 방식 적용 ===============
+        log.info("기상청 단기예보 API 호출 - 기준시간: {} {}, 좌표: ({}, {})",
+            baseDate, baseTime, coordinate.getX(), coordinate.getY());
+
         try {
-            // 엔드포인트 확인
-            String fullUrl = baseUrl.contains("getVilageFcst") ? baseUrl :
-                baseUrl.replace("getUltraSrtNcst", "getVilageFcst");
+            //  URL 생성
+            String url = UriComponentsBuilder.fromHttpUrl(baseUrl + FORECAST_ENDPOINT)
+                .queryParam("serviceKey", apiKey)
+                .queryParam("pageNo", "1")
+                .queryParam("numOfRows", "1000")
+                .queryParam("dataType", "JSON")
+                .queryParam("base_date", baseDate)
+                .queryParam("base_time", baseTime)
+                .queryParam("nx", coordinate.getX())
+                .queryParam("ny", coordinate.getY())
+                .build(true)  // 인코딩 비활성화 (이미 인코딩된 경우)
+                .toUriString();
 
-            StringBuilder urlBuilder = new StringBuilder(fullUrl);
+            log.debug("요청 URL: {}", url);
 
-            // =============== 이미 인코딩된 키를 추가 인코딩 없이 사용 ===============
-            urlBuilder.append("?").append(URLEncoder.encode("serviceKey", StandardCharsets.UTF_8))
-                .append("=").append(apiKey); // apiKey는 이미 인코딩됨
-
-            // 나머지 파라미터들은 인코딩
-            urlBuilder.append("&").append(URLEncoder.encode("pageNo", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode("1", StandardCharsets.UTF_8));
-
-            urlBuilder.append("&").append(URLEncoder.encode("numOfRows", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode("1000", StandardCharsets.UTF_8));
-
-            // =============== JSON 형식으로 확실히 요청 ===============
-            urlBuilder.append("&").append(URLEncoder.encode("dataType", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode("JSON", StandardCharsets.UTF_8));
-
-            // 기준 날짜와 시간
-            urlBuilder.append("&").append(URLEncoder.encode("base_date", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode(baseDate, StandardCharsets.UTF_8));
-
-            urlBuilder.append("&").append(URLEncoder.encode("base_time", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode(baseTime, StandardCharsets.UTF_8));
-
-            // 좌표
-            urlBuilder.append("&").append(URLEncoder.encode("nx", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode(coordinate.getX().toString(), StandardCharsets.UTF_8));
-
-            urlBuilder.append("&").append(URLEncoder.encode("ny", StandardCharsets.UTF_8))
-                .append("=").append(URLEncoder.encode(coordinate.getY().toString(), StandardCharsets.UTF_8));
-
-            String url = urlBuilder.toString();
-            log.info("🌤️ 기상청 API 요청 URL: {}", url);
-
-            // =============== 더 안전한 HTTP 호출 방식 사용 ===============
+            // HTTP 헤더 설정
             HttpHeaders headers = new HttpHeaders();
-            headers.set("Content-type", "application/json");  // 샘플과 동일
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Accept", MediaType.APPLICATION_JSON_VALUE);
+
             HttpEntity<String> entity = new HttpEntity<>(headers);
 
-            log.info("📡 기상청 API 호출 시작...");
+            // API 호출
+            ResponseEntity<WeatherApiResponse> response = restTemplate.exchange(
+                url, HttpMethod.GET, entity, WeatherApiResponse.class);
+
+            log.info("API 응답 수신 - 상태코드: {}", response.getStatusCode());
+
+            WeatherApiResponse body = response.getBody();
+            if (body == null) {
+                throw new WeatherApiException("응답 본문이 비어있습니다", "NULL_RESPONSE");
+            }
+
+            return body;
+
+        } catch (Exception e) {
+            log.error("기상청 API 호출 실패", e);
+            throw new WeatherApiException("기상청 API 호출 중 오류 발생: " + e.getMessage(), "API_CALL_ERROR");
+        }
+    }
+
+    // 실황정보 조회 (필요시 사용)
+    public WeatherApiResponse getWeatherNowcast(GridCoordinate coordinate) {
+        LocalDateTime now = LocalDateTime.now();
+        String baseDate = now.format(DATE_FORMATTER);
+        String baseTime = now.withMinute(0).withSecond(0).format(TIME_FORMATTER);
+
+        log.info("기상청 실황정보 API 호출 - 기준시간: {} {}, 좌표: ({}, {})",
+            baseDate, baseTime, coordinate.getX(), coordinate.getY());
+
+        try {
+            String url = UriComponentsBuilder.fromHttpUrl(baseUrl + NOWCAST_ENDPOINT)
+                .queryParam("serviceKey", apiKey)
+                .queryParam("pageNo", "1")
+                .queryParam("numOfRows", "100")
+                .queryParam("dataType", "JSON")
+                .queryParam("base_date", baseDate)
+                .queryParam("base_time", baseTime)
+                .queryParam("nx", coordinate.getX())
+                .queryParam("ny", coordinate.getY())
+                .build(false)
+                .toUriString();
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
 
             ResponseEntity<WeatherApiResponse> response = restTemplate.exchange(
                 url, HttpMethod.GET, entity, WeatherApiResponse.class);
 
-            log.info("📡 응답 상태: {}", response.getStatusCode());
-            log.info("📝 Content-Type: {}", response.getHeaders().getContentType());
-
-            WeatherApiResponse weatherResponse = response.getBody();
-
-            if (weatherResponse != null) {
-                // XML 구조에 맞춰 접근 방식 수정
-                if (weatherResponse.header() != null) {
-                    log.info("✅ 응답 파싱 성공 - 결과코드: {}",
-                        weatherResponse.header().resultCode());
-                } else if (weatherResponse.response() != null && weatherResponse.response().header() != null) {
-                    log.info("✅ 응답 파싱 성공 - 결과코드: {}",
-                        weatherResponse.response().header().resultCode());
-                }
-            }
-
-            return weatherResponse;
+            return response.getBody();
 
         } catch (Exception e) {
-            log.error("❌ 기상청 API 호출 실패", e);
-            log.error("🔍 좌표: x={}, y={}", coordinate.getX(), coordinate.getY());
-            log.error("🔍 날짜/시간: {} {}", baseDate, baseTime);
-            throw e;
+            log.error("기상청 실황 API 호출 실패", e);
+            throw new WeatherApiException("기상청 실황 API 호출 중 오류 발생", "NOWCAST_API_ERROR");
         }
     }
 
+    // 기상청 API 발표 시간 계산
     private LocalDateTime getBaseDateTime() {
         LocalDateTime now = LocalDateTime.now();
         int hour = now.getHour();
+        int minute = now.getMinute();
 
-        // API 제공 시간에 맞춰 조정 (02, 05, 08, 11, 14, 17, 20, 23시)
-        int[] apiTimes = {2, 5, 8, 11, 14, 17, 20, 23};
-        int baseHour = 23; // 기본값
+        // API 제공 시간: 02:10, 05:10, 08:10, 11:10, 14:10, 17:10, 20:10, 23:10
+        int[] baseTimes = {2, 5, 8, 11, 14, 17, 20, 23};
 
-        for (int time : apiTimes) {
-            if (hour >= time) {
-                baseHour = time;
+        LocalDateTime baseDateTime = null;
+
+        for (int i = baseTimes.length - 1; i >= 0; i--) {
+            int baseTime = baseTimes[i];
+            // 현재 시각이 baseTime + 10분 이후인 경우
+            if (hour > baseTime || (hour == baseTime && minute >= 10)) {
+                baseDateTime = now.withHour(baseTime).withMinute(0).withSecond(0).withNano(0);
+                break;
             }
         }
 
-        if (hour < 2) {
-            return now.minusDays(1).withHour(23).withMinute(0).withSecond(0).withNano(0);
+        // 당일 02:10 이전이면 전날 23시 데이터 사용
+        if (baseDateTime == null) {
+            baseDateTime = now.minusDays(1).withHour(23).withMinute(0).withSecond(0).withNano(0);
         }
 
-        return now.withHour(baseHour).withMinute(0).withSecond(0).withNano(0);
+        log.debug("기준 시간 계산: 현재 {} -> 기준시간 {}", now, baseDateTime);
+
+        return baseDateTime;
     }
 }
-//@Component
-//@Slf4j
-//public class WeatherApiClient {
-//
-//    private final RestTemplate restTemplate;
-//    private final String apiKey;
-//    private final String forecastBaseUrl;
-//    private final String nowcastBaseUrl;
-//
-//    public WeatherApiClient(RestTemplate restTemplate,
-//        @Value("${weather.api.key}") String apiKey,
-//        @Value("${weather.api.forecast.url}") String forecastBaseUrl,
-//        @Value("${weather.api.nowcast.url}") String nowcastBaseUrl) {
-//        this.restTemplate = restTemplate;
-//        this.apiKey = apiKey;
-//        this.forecastBaseUrl = forecastBaseUrl;
-//        this.nowcastBaseUrl = nowcastBaseUrl;
-//    }
-//
-//    /**
-//     * 단기예보 조회
-//     */
-//    public WeatherApiResponse getWeatherForecast(GridCoordinate coordinate) {
-//        LocalDateTime baseDateTime = getForecastBaseDateTime();
-//        String baseDate = baseDateTime.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-//        String baseTime = baseDateTime.format(DateTimeFormatter.ofPattern("HHmm"));
-//
-//        String url = UriComponentsBuilder.fromHttpUrl(forecastBaseUrl)
-//            .queryParam("serviceKey", apiKey)
-//            .queryParam("pageNo", "1")
-//            .queryParam("numOfRows", "1000")
-//            .queryParam("dataType", "JSON")
-//            .queryParam("base_date", baseDate)
-//            .queryParam("base_time", baseTime)
-//            .queryParam("nx", coordinate.getX())
-//            .queryParam("ny", coordinate.getY())
-//            .build()
-//            .toUriString();
-//
-//        log.debug("Forecast API request: {}", url);
-//        return restTemplate.getForObject(url, WeatherApiResponse.class);
-//    }
-//
-//    /**
-//     * 실황정보 조회
-//     */
-//    public WeatherNowcastResponse getWeatherNowcast(GridCoordinate coordinate) {
-//        LocalDateTime baseDateTime = getNowcastBaseDateTime();
-//        String baseDate = baseDateTime.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-//        String baseTime = baseDateTime.format(DateTimeFormatter.ofPattern("HHmm"));
-//
-//        String url = UriComponentsBuilder.fromHttpUrl(nowcastBaseUrl)
-//            .queryParam("serviceKey", apiKey)
-//            .queryParam("pageNo", "1")
-//            .queryParam("numOfRows", "1000")
-//            .queryParam("dataType", "JSON")
-//            .queryParam("base_date", baseDate)
-//            .queryParam("base_time", baseTime)
-//            .queryParam("nx", coordinate.getX())
-//            .queryParam("ny", coordinate.getY())
-//            .build()
-//            .toUriString();
-//
-//        log.debug("Nowcast API request: {}", url);
-//        return restTemplate.getForObject(url, WeatherNowcastResponse.class);
-//    }
-//
-//    private LocalDateTime getForecastBaseDateTime() {
-//        LocalDateTime now = LocalDateTime.now();
-//        int hour = now.getHour();
-//
-//        // 단기예보 API 제공 시간에 맞춰 조정 (02, 05, 08, 11, 14, 17, 20, 23시)
-//        int[] apiTimes = {2, 5, 8, 11, 14, 17, 20, 23};
-//        int baseHour = 23; // 기본값
-//
-//        for (int time : apiTimes) {
-//            if (hour >= time) {
-//                baseHour = time;
-//            }
-//        }
-//
-//        if (hour < 2) {
-//            return now.minusDays(1).withHour(23).withMinute(0).withSecond(0).withNano(0);
-//        }
-//
-//        return now.withHour(baseHour).withMinute(0).withSecond(0).withNano(0);
-//    }
-//
-//    private LocalDateTime getNowcastBaseDateTime() {
-//        LocalDateTime now = LocalDateTime.now();
-//        // 실황정보는 매시 정각에 발표되므로 현재 시간의 정각 사용
-//        return now.withMinute(0).withSecond(0).withNano(0);
-//    }
-//}
