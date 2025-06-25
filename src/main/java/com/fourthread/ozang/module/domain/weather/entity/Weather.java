@@ -22,6 +22,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import lombok.Setter;
 
 @Entity
 @Table(name = "weather")
@@ -31,7 +32,6 @@ import java.time.LocalDateTime;
 @Builder
 public class Weather extends BaseEntity {
 
-    // =============== 예보 시간 정보 ===============
     @Column(nullable = false)
     private LocalDateTime forecastedAt;  // 예보 발표 시간
 
@@ -59,6 +59,7 @@ public class Weather extends BaseEntity {
 
     // API 응답 해시 (중복 방지용)
     @Column(unique = true)
+    @Setter
     private String apiResponseHash;
 
     public static Weather create(
